@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="home">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>TripSplit — Mobile Trip Splitter</title>
+<meta name="description" content="Phone-first trip expense splitter: add, split, settle, export.">
+
+<!-- Excel export -->
+<script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+<style>
+  :root{
+    /* core */
+    --bg:#0b1223; --card:#111827; --muted:#9aa7bd; --text:#e5e7eb;
+    --ring:#31405c; --bd:#1f2937; --table:#0b1221; --th:#0f1a32;
+
+    /* page accent (switch via [data-theme]) */
+    --accent:#22c55e; --accent-soft:rgba(34,197,94,.24);
+  }
+  [data-theme="home"]    { --accent:#22c55e; --accent-soft:rgba(34,197,94,.24); }
+  [data-theme="summary"] { --accent:#60a5fa; --accent-soft:rgba(96,165,250,.24); }
+  [data-theme="settle"]  { --accent:#a78bfa; --accent-soft:rgba(167,139,250,.24); }
+  [data-theme="reports"] { --accent:#f59e0b; --accent-soft:rgba(245,158,11,.24); }
+  [data-theme="expenses"]{ --accent:#f472b6; --accent-soft:rgba(244,114,182,.24); }
+
+  /* phone-only layout */
+  html,body{height:100%}
+  body{
+    margin:0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    color:var(--text);
+    background:linear-gradient(180deg,#0a0f1f 0%, #0d1326 60%, #0f172a 100%);
+  }
+  .wrap{
+    max-width: 480px;           /* phone width target */
+    margin: 0 auto;
+    padding: 12px 12px calc(88px + env(safe-area-inset-bottom)); /* leave space for bottom nav */
+  }
+
+  /* app bar */
+  .appbar{
+    position: sticky; top:0; z-index:5;
+    background:#0f1a32; border-bottom:1px solid var(--bd);
+    padding: 10px 12px calc(8px + env(safe-area-inset-top));
+  }
+  .brand{display:flex; align-items:center; gap:10px; font-weight:800}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  .sub{color:var(--muted);font-size:12px;margin-top:2px}
+
+  /* buttons */
+  .btn{background:linear-gradient(180deg,#1d884a,var(--accent)); color:#062012; border:0; border-radius:12px; padding:10px 14px; font-weight:700}
+  .btn.secondary{background:#182338;color:#cbd5e1;border:1px solid var(--ring)}
+  .btn.danger{background:linear-gradient(180deg,#7a1010,#ef4444); color:#190404}
+
+  .top-actions{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px}
+  .top-actions .btn{padding:8px 10px; font-size:12px}
+
+  /* cards (use native details/summary so tapping works everywhere) */
+  details.card{
+    background:var(--card); border:1px solid var(--bd); border-radius:14px;
+    overflow:hidden; margin: 10px 0; box-shadow:0 10px 30px rgba(0,0,0,.25);
+  }
+  details.card summary{
+    list-style:none; cursor:pointer; padding:12px; display:flex; align-items:center; justify-content:space-between;
+    background: linear-gradient(90deg, var(--accent-soft), transparent 60%);
+    border-bottom:1px solid var(--bd);
+  }
+  details.card summary::-webkit-details-marker{display:none}
+  .title{font-weight:800; display:flex; align-items:center; gap:10px}
+  .title .title-dot{width:9px;height:9px;border-radius:50%;background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft)}
+  .chev{opacity:.9}
+  details[open] .chev{transform:rotate(180deg)}
+  .card-body{padding:12px}
+
+  /* form */
+  .row{display:flex; flex-wrap:wrap; gap:10px}
+  .field{flex:1 1 140px; min-width: 140px; display:flex; flex-direction:column; gap:6px}
+  label{font-size:12px; color:var(--muted)}
+  input,select,textarea{
+    background:#0d162b; color:var(--text); border:1px solid var(--ring);
+    border-radius:10px; padding:10px 12px; outline:none; font-size:14px
+  }
+  input:focus,select:focus{border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+
+  .chips{display:flex; gap:8px; flex-wrap:wrap}
+  .chip{padding:6px 10px; border-radius:999px; background:#0b1221; border:1px solid var(--ring); color:#cbd5e1; font-size:12px}
+  .danger-link{color:#fecaca; cursor:pointer}
+
+  /* tables (scroll on small screens) */
+  .table-wrap{overflow:auto; border:1px solid var(--bd); border-radius:12px}
+  table{width:100%; border-collapse:collapse; min-width: 560px}
+  th,td{padding:10px; text-align:left; border-bottom:1px solid #1e293b; background:var(--table); font-size:13px}
+  th{position:sticky; top:0; background:var(--th); color:#cbd5e1}
+  td small{color:var(--muted)}
+  .good{color:#86efac} .bad{color:#fca5a5} .neutral{color:#93c5fd}
+  .inline-input{width:84px}
+  .nudge{font-size:12px; color:var(--muted)}
+
+  /* kpis */
+  .kpis{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+  .pill{padding:12px; background:#0c1326; border:1px solid var(--bd); border-radius:12px}
+  .k-label{font-size:12px; color:var(--muted)}
+  .k-val{font-weight:900; font-size:18px}
+
+  /* bottom nav — always visible */
+  .bottom-nav{
+    position:fixed; left:0; right:0; bottom:0; z-index:6;
+    background:#0f1a32; border-top:1px solid var(--bd);
+    padding-bottom: env(safe-area-inset-bottom);
+    display:flex;
+  }
+  .tab{flex:1; text-align:center; padding:10px 6px; color:#cbd5e1; font-size:12px; cursor:pointer; user-select:none}
+  .tab span{display:block; font-size:18px}
+  .tab.active{background:#13203a; color:#fff; box-shadow: inset 0 2px 0 var(--accent)}
+
+  /* views */
+  .view{display:none} .view.active{display:block}
+
+  /* floating add button (phone thumb) */
+  .fab{
+    position:fixed; right:16px; bottom: calc(76px + env(safe-area-inset-bottom));
+    width:56px; height:56px; border-radius:50%; display:grid; place-items:center;
+    background: radial-gradient(120% 140% at 50% 0%, var(--accent), #1d884a); color:#041106;
+    font-size:26px; font-weight:900; border:0; box-shadow:0 10px 26px rgba(0,0,0,.35); z-index:7
+  }
+
+  /* shrink headers on really small devices */
+  @media (max-width:360px){
+    .kpis{grid-template-columns:1fr}
+    table{min-width:520px}
+  }
+</style>
+</head>
+<body>
+
+  <!-- App bar -->
+  <div class="appbar">
+    <div class="brand"><span class="dot"></span> TripSplit</div>
+    <div class="sub">Phone-first. Tap tabs to navigate. Panels expand on tap.</div>
+    <div class="top-actions">
+      <button id="export-xlsx" class="btn">Excel</button>
+      <button id="export-csv" class="btn secondary">CSV</button>
+      <button id="export-json" class="btn secondary">Backup</button>
+      <label class="btn secondary" for="import-json-input" style="cursor:pointer">Import</label>
+      <input id="import-json-input" type="file" accept=".json" hidden />
+      <button id="reset-data" class="btn danger">Reset</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- HOME -->
+    <section id="view-home" class="view active">
+      <!-- Trip basics (collapsed) -->
+      <details class="card" id="card-basics">
+        <summary>
+          <div class="title"><span class="title-dot"></span> Trip Basics</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="row">
+            <div class="field"><label>Trip name</label><input id="trip-name" placeholder="e.g., Cox’s Bazar Weekend" /></div>
+            <div class="field" style="max-width:120px"><label>Currency</label><input id="currency-symbol" value="৳" maxlength="3" /></div>
+          </div>
+          <div class="kpis" style="margin-top:8px">
+            <div class="pill"><div class="k-label">Total (all)</div><div class="k-val" id="home-kpi-trip">৳0.00</div></div>
+            <div class="pill"><div class="k-label">Shared</div><div class="k-val" id="home-kpi-shared">৳0.00</div></div>
+            <div class="pill"><div class="k-label">Personal</div><div class="k-val" id="home-kpi-personal">৳0.00</div></div>
+            <div class="pill"><div class="k-label">Days</div><div class="k-val" id="home-kpi-days">0</div></div>
+          </div>
+        </div>
+      </details>
+
+      <!-- Add expense (OPEN by default) -->
+      <details class="card" id="card-add-expense" open>
+        <summary>
+          <div class="title"><span class="title-dot"></span> ➕ Add Expense</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body" id="add-expense-body">
+          <div class="row">
+            <div class="field" style="max-width:150px"><label>Date</label><input id="exp-date" type="date" /></div>
+            <div class="field"><label>Description</label><input id="exp-desc" placeholder="e.g., Lunch at Kebab Ghar" /></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Category</label><select id="exp-cat"></select></div>
+            <div class="field"><label>New category</label><input id="new-cat" placeholder="e.g., Tickets" /></div>
+          </div>
+          <div class="row">
+            <div class="field" style="max-width:160px"><label>Amount</label><input id="exp-amount" type="number" step="0.01" placeholder="0.00" /></div>
+            <div class="field" style="min-width:160px"><label>Payer</label><select id="exp-payer"></select></div>
+          </div>
+          <div class="row">
+            <div class="field" style="min-width:160px">
+              <label>Scope</label>
+              <select id="scope">
+                <option value="shared">Shared with selected</option>
+                <option value="personal">Personal (payer only)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Participants involved</label>
+              <select id="exp-involved" multiple></select>
+              <small class="nudge">Tip: default selects everyone.</small>
+            </div>
+            <div class="field" style="min-width:160px">
+              <label>Split method</label>
+              <select id="split-type">
+                <option value="equal">Equal</option>
+                <option value="shares">By shares (weights)</option>
+                <option value="exact">Exact amounts</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="split-table-wrap" class="table-wrap" style="display:none;margin:8px 0">
+            <table id="split-table">
+              <thead><tr id="split-head-row"></tr></thead>
+              <tbody><tr id="split-body-row"></tr></tbody>
+            </table>
+          </div>
+
+          <div class="row" style="margin-top:8px">
+            <button id="add-expense" class="btn">Add</button>
+            <button id="clear-form" class="btn secondary">Clear</button>
+            <button class="btn secondary" onclick="go('view-expenses')">View All</button>
+          </div>
+        </div>
+      </details>
+
+      <!-- Participants (collapsed) -->
+      <details class="card" id="card-participants">
+        <summary>
+          <div class="title"><span class="title-dot"></span> 👥 Participants</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="row">
+            <div class="field"><label>Name</label><input id="person-name" placeholder="e.g., Shovon" /></div>
+            <div class="field" style="max-width:140px; align-self:flex-end">
+              <button id="add-person" class="btn" style="width:100%">Add</button>
+            </div>
+          </div>
+          <div class="chips" id="people-chips" style="margin-top:8px"></div>
+        </div>
+      </details>
+    </section>
+
+    <!-- SUMMARY -->
+    <section id="view-summary" class="view">
+      <details class="card" open>
+        <summary>
+          <div class="title"><span class="title-dot"></span> Summary Snapshot</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="kpis">
+            <div class="pill"><div class="k-label">Total</div><div class="k-val" id="sum-kpi-trip">৳0.00</div></div>
+            <div class="pill"><div class="k-label">Shared</div><div class="k-val" id="sum-kpi-shared">৳0.00</div></div>
+            <div class="pill"><div class="k-label">Personal</div><div class="k-val" id="sum-kpi-personal">৳0.00</div></div>
+            <div class="pill"><div class="k-label">Days</div><div class="k-val" id="sum-kpi-days">0</div></div>
+            <div class="pill"><div class="k-label"># Expenses</div><div class="k-val" id="sum-kpi-count">0</div></div>
+            <div class="pill"><div class="k-label">Avg / Person (shared)</div><div class="k-val" id="sum-kpi-avg">৳0.00</div></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="card">
+        <summary>
+          <div class="title"><span class="title-dot"></span> Balances (Paid − Owed)</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table id="balance-table-el">
+              <thead><tr><th>Person</th><th>Paid</th><th>Owed</th><th>Net</th></tr></thead>
+              <tbody id="balance-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+
+      <details class="card">
+        <summary>
+          <div class="title"><span class="title-dot"></span> Personal Totals (not shared)</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table id="personal-table-el">
+              <thead><tr><th>Person</th><th>Personal Spend</th></tr></thead>
+              <tbody id="personal-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- SETTLEMENTS -->
+    <section id="view-settle" class="view">
+      <details class="card" open>
+        <summary>
+          <div class="title"><span class="title-dot"></span> Settlement Suggestions</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table id="settle-table-el"><thead><tr><th>From</th><th>To</th><th>Amount</th></tr></thead><tbody id="settle-table"></tbody></table>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- REPORTS -->
+    <section id="view-reports" class="view">
+      <details class="card" open>
+        <summary>
+          <div class="title"><span class="title-dot"></span> Totals by Category</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table id="cat-table-el"><thead><tr><th>Category</th><th>Total</th></tr></thead><tbody id="cat-table"></tbody></table>
+          </div>
+        </div>
+      </details>
+
+      <details class="card">
+        <summary>
+          <div class="title"><span class="title-dot"></span> Totals by Day</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table id="day-table-el"><thead><tr><th>Date</th><th>Total</th></tr></thead><tbody id="day-table"></tbody></table>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- EXPENSES -->
+    <section id="view-expenses" class="view">
+      <details class="card" open>
+        <summary>
+          <div class="title"><span class="title-dot"></span> Filters</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="row">
+            <div class="field" style="min-width:140px"><label>Category</label><select id="filter-cat"><option value="__all__">All</option></select></div>
+            <div class="field" style="min-width:140px"><label>Payer</label><select id="filter-payer"><option value="__all__">All</option></select></div>
+            <div class="field" style="min-width:140px"><label>Scope</label>
+              <select id="filter-scope"><option value="__all__">All</option><option value="shared">Shared</option><option value="personal">Personal</option></select>
+            </div>
+            <div class="field" style="flex:1"><label>Search</label><input id="filter-text" placeholder="Search description…" /></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="card" open>
+        <summary>
+          <div class="title"><span class="title-dot"></span> All Expenses</div>
+          <div class="chev">▾</div>
+        </summary>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Date</th><th>Description</th><th>Category</th><th>Payer</th>
+                <th>Scope</th><th>Amount</th><th>Split Summary</th><th style="width:110px">Actions</th>
+              </tr></thead>
+              <tbody id="exp-table"></tbody>
+            </table>
+          </div>
+          <div class="sub" style="margin-top:6px">Personal expenses don’t affect settlements.</div>
+        </div>
+      </details>
+    </section>
+  </div>
+
+  <!-- floating Add -->
+  <button class="fab" id="fab-add" title="Add expense">+</button>
+
+  <!-- bottom nav (ALWAYS visible) -->
+  <nav class="bottom-nav">
+    <div class="tab active" data-target="view-home"><span>🏠</span>Home</div>
+    <div class="tab" data-target="view-summary"><span>📊</span>Summary</div>
+    <div class="tab" data-target="view-settle"><span>🤝</span>Settle</div>
+    <div class="tab" data-target="view-reports"><span>📈</span>Reports</div>
+    <div class="tab" data-target="view-expenses"><span>🧾</span>Expenses</div>
+  </nav>
+
+<script>
+/* ===== State & helpers ===== */
+const storeKey = "tripsplit.v3";
+const defaultCategories = ["Transport","Food","Lodging","Activity","Tickets","Misc"];
+let state = { tripName:"", currency:"৳", people:[], categories:[...defaultCategories], expenses:[] };
+
+try{ const raw = localStorage.getItem(storeKey); if(raw) state = JSON.parse(raw); }catch(e){}
+
+function save(){ localStorage.setItem(storeKey, JSON.stringify(state)); }
+const $ = id => document.getElementById(id);
+const fmt = n => `${state.currency}${Number(n||0).toFixed(2)}`;
+const todayStr = () => new Date().toISOString().slice(0,10);
+const uid = () => Math.random().toString(36).slice(2,10);
+function safeName(s){ return (s||"").trim().replace(/[^a-z0-9\-_]+/gi,"_"); }
+function setTheme(name){ document.documentElement.setAttribute("data-theme", name); }
+
+/* ===== Elements ===== */
+const tripName = $("trip-name"), currencySymbol = $("currency-symbol");
+const personName = $("person-name"), addPersonBtn = $("add-person"), peopleChips = $("people-chips");
+
+const expDate = $("exp-date"), expDesc = $("exp-desc"), expCat = $("exp-cat"), newCat = $("new-cat");
+const expAmount = $("exp-amount"), expPayer = $("exp-payer"), expInvolved = $("exp-involved");
+const splitType = $("split-type"), splitWrap = $("split-table-wrap");
+const splitHeadRow = $("split-head-row"), splitBodyRow = $("split-body-row");
+const scopeSel = $("scope");
+
+const exportXlsxBtn = $("export-xlsx"), exportCsvBtn = $("export-csv"), exportJsonBtn = $("export-json"), importJsonInput = $("import-json-input"), resetBtn = $("reset-data");
+
+const filterCat = $("filter-cat"), filterPayer = $("filter-payer"), filterScope = $("filter-scope"), filterText = $("filter-text"), expTable = $("exp-table");
+
+const homeKTrip = $("home-kpi-trip"), homeKShared = $("home-kpi-shared"), homeKPersonal = $("home-kpi-personal"), homeKDays = $("home-kpi-days");
+const sumKTrip = $("sum-kpi-trip"), sumKShared = $("sum-kpi-shared"), sumKPersonal = $("sum-kpi-personal"), sumKDays = $("sum-kpi-days"), sumKCount = $("sum-kpi-count"), sumKAvg = $("sum-kpi-avg");
+
+const balanceTable = $("balance-table"), settleTable = $("settle-table"), catTable = $("cat-table"), dayTable = $("day-table"), personalTable = $("personal-table");
+
+/* ===== Navigation (tabs) ===== */
+function go(id){
+  document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+  document.querySelectorAll(".bottom-nav .tab").forEach(t=> t.classList.toggle("active", t.dataset.target===id));
+  const theme = { "view-home":"home","view-summary":"summary","view-settle":"settle","view-reports":"reports","view-expenses":"expenses" }[id] || "home";
+  setTheme(theme);
+  renderAll();
+}
+document.querySelectorAll(".bottom-nav .tab").forEach(tab=>{
+  tab.addEventListener("click", ()=> go(tab.dataset.target));
+});
+$("fab-add").addEventListener("click", ()=>{
+  go("view-home");
+  document.querySelector("#card-add-expense").open = true; // ensure open
+  document.querySelector("#add-expense-body").scrollIntoView({behavior:"smooth", block:"start"});
+});
+
+/* ===== Renderers ===== */
+function renderPeople(){
+  peopleChips.innerHTML="";
+  state.people.forEach(name=>{
+    const chip=document.createElement("div");
+    chip.className="chip";
+    chip.innerHTML = `${name} &nbsp; <span class="danger-link" data-del="${name}">✕</span>`;
+    peopleChips.appendChild(chip);
+  });
+
+  // payer + filters
+  [expPayer, filterPayer].forEach(sel=>{
+    sel.innerHTML = '<option value="__all__">All</option>';
+    state.people.forEach(p=>{ const o=document.createElement("option"); o.value=p; o.textContent=p; sel.appendChild(o); });
+  });
+  // payer shouldn't show "All"
+  if (expPayer.options.length) expPayer.remove(0);
+
+  // involved multi-select (defaults to all)
+  expInvolved.innerHTML="";
+  state.people.forEach(p=>{
+    const o=document.createElement("option");
+    o.value=p; o.textContent=p; o.selected=true; expInvolved.appendChild(o);
+  });
+
+  // delete
+  peopleChips.querySelectorAll("[data-del]").forEach(a=>{
+    a.addEventListener("click", ()=>{
+      const name=a.getAttribute("data-del");
+      const used = state.expenses.some(e=>e.payer===name || (e.involved||[]).includes(name));
+      if(used && !confirm(`${name} appears in expenses. Remove anyway?`)) return;
+      state.people = state.people.filter(p=>p!==name);
+      state.expenses.forEach(e=>{
+        if(e.payer===name && state.people.length) e.payer = state.people[0];
+        e.involved = (e.involved||[]).filter(i=>i!==name);
+        if(e.splits) delete e.splits[name];
+      });
+      save(); renderAll();
+    });
+  });
+}
+function renderCategories(){
+  expCat.innerHTML=""; state.categories.forEach(c=>{ const o=document.createElement("option"); o.value=c; o.textContent=c; expCat.appendChild(o); });
+  filterCat.innerHTML='<option value="__all__">All</option>';
+  state.categories.forEach(c=>{ const o=document.createElement("option"); o.value=c; o.textContent=c; filterCat.appendChild(o); });
+}
+function selectedInvolved(){
+  const sel = Array.from(expInvolved.selectedOptions).map(o=>o.value);
+  return sel.length? sel : [...state.people];
+}
+function renderSplitInputs(){
+  const involved = selectedInvolved();
+  const type = splitType.value;
+  if(scopeSel.value==="personal" || type==="equal" || involved.length===0){ splitWrap.style.display="none"; return; }
+  splitWrap.style.display="block";
+  splitHeadRow.innerHTML=""; splitBodyRow.innerHTML="";
+  involved.forEach(n=>{ const th=document.createElement("th"); th.textContent=n; splitHeadRow.appendChild(th); });
+  involved.forEach(n=>{
+    const td=document.createElement("td");
+    const input=document.createElement("input");
+    input.type="number"; input.step="0.01"; input.className="inline-input";
+    input.placeholder=(type==="shares"?"1":"0.00"); input.dataset.person=n;
+    td.appendChild(input); splitBodyRow.appendChild(td);
+  });
+}
+function renderHomeKPIs(){
+  const { totals, dayTotals } = computeStats();
+  homeKTrip.textContent = fmt(totals.trip);
+  homeKShared.textContent = fmt(totals.shared);
+  homeKPersonal.textContent = fmt(totals.personal);
+  homeKDays.textContent = Object.keys(dayTotals).length;
+}
+function renderSummaryKPIs(){
+  const { totals, dayTotals, bal } = computeStats();
+  sumKTrip.textContent = fmt(totals.trip);
+  sumKShared.textContent = fmt(totals.shared);
+  sumKPersonal.textContent = fmt(totals.personal);
+  sumKDays.textContent = Object.keys(dayTotals).length;
+  sumKCount.textContent = state.expenses.length;
+  sumKAvg.textContent = fmt(totals.shared / (state.people.length || 1));
+
+  // balances
+  balanceTable.innerHTML="";
+  state.people.forEach(p=>{
+    const paid=bal.paid[p]||0, owed=bal.owed[p]||0, net=paid-owed;
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${p}</td><td>${fmt(paid)}</td><td>${fmt(owed)}</td>
+    <td class="${net>0?'good':(net<0?'bad':'neutral')}"><b>${fmt(net)}</b></td>`;
+    balanceTable.appendChild(tr);
+  });
+
+  // personal totals
+  personalTable.innerHTML="";
+  const pers = computePersonalPerPerson();
+  state.people.forEach(p=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${p}</td><td>${fmt(pers[p]||0)}</td>`;
+    personalTable.appendChild(tr);
+  });
+}
+function renderSettlements(){
+  const { bal } = computeStats();
+  const tx = computeSettlements(bal);
+  settleTable.innerHTML="";
+  if(tx.length===0){
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td colspan="3"><small class="good">All settled. 🎉</small></td>`;
+    settleTable.appendChild(tr); return;
+  }
+  tx.forEach(s=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML = `<td>${s.from}</td><td>${s.to}</td><td>${fmt(s.amount)}</td>`;
+    settleTable.appendChild(tr);
+  });
+}
+function renderReports(){
+  const { catTotals, dayTotals } = computeStats();
+  catTable.innerHTML="";
+  Object.keys(catTotals).sort().forEach(c=>{
+    const tr=document.createElement("tr"); tr.innerHTML=`<td>${c}</td><td>${fmt(catTotals[c])}</td>`;
+    catTable.appendChild(tr);
+  });
+  dayTable.innerHTML="";
+  Object.keys(dayTotals).sort().forEach(d=>{
+    const tr=document.createElement("tr"); tr.innerHTML=`<td>${d}</td><td>${fmt(dayTotals[d])}</td>`;
+    dayTable.appendChild(tr);
+  });
+}
+function renderExpensesTable(){
+  const cf=filterCat.value, pf=filterPayer.value, sf=filterScope.value, txt=(filterText.value||"").toLowerCase();
+  expTable.innerHTML="";
+  state.expenses
+    .filter(e=> cf==="__all__" || e.cat===cf)
+    .filter(e=> pf==="__all__" || e.payer===pf)
+    .filter(e=> sf==="__all__" || e.scope===sf)
+    .filter(e=> txt==="" || (e.desc||"").toLowerCase().includes(txt))
+    .sort((a,b)=> a.date<b.date?-1: a.date>b.date?1:0)
+    .forEach(e=>{
+      const splitSummary = Object.entries(e.splits||{}).map(([k,v])=>`${k}: ${fmt(v)}`).join(", ");
+      const tr=document.createElement("tr");
+      tr.innerHTML=`
+        <td>${e.date}</td><td>${e.desc||"-"}</td><td>${e.cat}</td><td>${e.payer}</td>
+        <td>${e.scope}</td><td>${fmt(e.amount)}</td>
+        <td><small>${e.scope==='personal' ? '(personal)' : (splitSummary||'(equal)')}</small></td>
+        <td>
+          <button class="btn secondary" data-dup="${e.id}" style="padding:6px 8px;font-size:12px">Dup</button>
+          <button class="btn danger" data-del="${e.id}" style="padding:6px 8px;font-size:12px">🗑</button>
+        </td>`;
+      expTable.appendChild(tr);
+    });
+
+  expTable.querySelectorAll("[data-del]").forEach(b=> b.addEventListener("click", ()=>{
+    const id=b.getAttribute("data-del"); state.expenses = state.expenses.filter(x=>x.id!==id); save(); renderAll();
+  }));
+  expTable.querySelectorAll("[data-dup]").forEach(b=> b.addEventListener("click", ()=>{
+    const id=b.getAttribute("data-dup"); const src=state.expenses.find(x=>x.id===id); if(!src) return;
+    const clone=JSON.parse(JSON.stringify(src)); clone.id=uid(); state.expenses.push(clone); save(); renderAll();
+  }));
+}
+function renderHome(){
+  currencySymbol.value = state.currency;
+  tripName.value = state.tripName || "";
+  renderPeople(); renderCategories(); renderSplitInputs(); renderHomeKPIs();
+}
+function renderAll(){
+  renderHome(); renderSummaryKPIs(); renderSettlements(); renderReports(); renderExpensesTable();
+}
+
+/* ===== Stats & settlement ===== */
+function computeStats(){
+  const bal={paid:{},owed:{}}; state.people.forEach(p=>{ bal.paid[p]=0; bal.owed[p]=0; });
+  let totalTrip=0, totalShared=0, totalPersonal=0;
+  const catTotals={}, dayTotals={};
+  state.expenses.forEach(e=>{
+    const amt=Number(e.amount||0);
+    totalTrip+=amt; catTotals[e.cat]=(catTotals[e.cat]||0)+amt; dayTotals[e.date]=(dayTotals[e.date]||0)+amt;
+    bal.paid[e.payer]=(bal.paid[e.payer]||0)+amt;
+    if(e.scope==='personal'){ totalPersonal+=amt; bal.owed[e.payer]=(bal.owed[e.payer]||0)+amt; return; }
+    totalShared+=amt;
+    const splits = e.splits && Object.keys(e.splits).length ? e.splits : splitEqual(e);
+    Object.entries(splits).forEach(([name,share])=> bal.owed[name]=(bal.owed[name]||0)+Number(share||0));
+  });
+  return { totals:{trip:totalTrip, shared:totalShared, personal:totalPersonal}, bal, catTotals, dayTotals };
+}
+function computePersonalPerPerson(){
+  const map={}; state.people.forEach(p=>map[p]=0);
+  state.expenses.forEach(e=>{ if(e.scope==='personal') map[e.payer]=(map[e.payer]||0)+Number(e.amount||0); });
+  return map;
+}
+function splitEqual(e){
+  const inv=(e.involved && e.involved.length)? e.involved : [...state.people];
+  const per = inv.length ? Number(e.amount||0)/inv.length : 0;
+  const res={}; inv.forEach(p=> res[p]=per);
+  return clampToTotal(res, Number(e.amount||0));
+}
+function splitShares(e, weights){
+  const inv=(e.involved && e.involved.length)? e.involved : [...state.people];
+  const ws=inv.map(p=>Math.max(0, Number(weights[p]||0))); const sum=ws.reduce((a,b)=>a+b,0);
+  const res={};
+  if(sum<=0){ inv.forEach(p=> res[p]= Number(e.amount||0)/inv.length); }
+  else { inv.forEach((p,i)=> res[p]= Number(e.amount||0)*(ws[i]/sum)); }
+  return clampToTotal(res, Number(e.amount||0));
+}
+function splitExact(e, exacts){
+  const inv=(e.involved && e.involved.length)? e.involved : [...state.people];
+  const res={}; inv.forEach(p=> res[p]= Number(exacts[p]||0));
+  return clampToTotal(res, Number(e.amount||0));
+}
+function clampToTotal(map,total){
+  const names=Object.keys(map); const raw=names.map(n=>Number(map[n]||0)); let sum=raw.reduce((a,b)=>a+b,0);
+  if(Math.abs(sum-total)<0.005){
+    const fixed=raw.map(v=>Number(v.toFixed(2))); sum=fixed.reduce((a,b)=>a+b,0); let diff=Number((total-sum).toFixed(2));
+    const res={}; names.forEach((n,i)=> res[n]=fixed[i]);
+    let i=0; while(Math.abs(diff)>=0.01 && i<names.length*3){
+      const n=names[i%names.length]; res[n]=Number((res[n]+(diff>0?0.01:-0.01)).toFixed(2));
+      diff=Number((total-Object.values(res).reduce((a,b)=>a+b,0)).toFixed(2)); i++;
+    } return res;
+  } else {
+    const res={};
+    if(sum===0){ const per= total/names.length; names.forEach(n=> res[n]=Number(per.toFixed(2))); }
+    else { names.forEach((n,i)=> res[n]=Number((total*raw[i]/sum).toFixed(2))); }
+    return res;
+  }
+}
+function computeSettlements(bal){
+  const creditors=[], debtors=[];
+  state.people.forEach(p=>{
+    const net=(bal.paid[p]||0)-(bal.owed[p]||0);
+    if(net>0.005) creditors.push({name:p, amt:Number(net.toFixed(2))});
+    else if(net<-0.005) debtors.push({name:p, amt:Number((-net).toFixed(2))});
+  });
+  creditors.sort((a,b)=>b.amt-a.amt); debtors.sort((a,b)=>b.amt-a.amt);
+  const tx=[]; let i=0,j=0;
+  while(i<debtors.length && j<creditors.length){
+    const d=debtors[i], c=creditors[j];
+    const pay=Number(Math.min(d.amt,c.amt).toFixed(2));
+    if(pay>0){ tx.push({from:d.name,to:c.name,amount:pay}); d.amt=Number((d.amt-pay).toFixed(2)); c.amt=Number((c.amt-pay).toFixed(2)); }
+    if(d.amt<=0.004) i++; if(c.amt<=0.004) j++;
+  }
+  return tx;
+}
+
+/* ===== Events ===== */
+if(!expDate.value) expDate.value = todayStr();
+
+addPersonBtn.addEventListener("click", ()=>{
+  const name=(personName.value||"").trim();
+  if(!name) return;
+  if(state.people.includes(name)){ alert("Name already exists."); return; }
+  state.people.push(name); personName.value=""; save(); renderAll();
+});
+currencySymbol.addEventListener("input", ()=>{ state.currency = currencySymbol.value || "৳"; save(); renderAll(); });
+tripName.addEventListener("input", ()=>{ state.tripName = tripName.value; save(); });
+
+newCat.addEventListener("change", ()=>{
+  const c=(newCat.value||"").trim();
+  if(c && !state.categories.includes(c)){ state.categories.push(c); save(); renderCategories(); expCat.value=c; }
+  newCat.value="";
+});
+function refreshSplitUI(){ renderSplitInputs(); }
+$("scope").addEventListener("change", refreshSplitUI);
+$("exp-involved").addEventListener("change", refreshSplitUI);
+$("split-type").addEventListener("change", refreshSplitUI);
+
+$("add-expense").addEventListener("click", ()=>{
+  if(state.people.length===0){ alert("Add participants first."); return; }
+  const date=expDate.value || todayStr();
+  const desc=(expDesc.value||"").trim();
+  const cat =expCat.value || state.categories[0];
+  const amount=Number(expAmount.value||0);
+  const payer=expPayer.value || state.people[0];
+  const scope=scopeSel.value;
+  if(!amount || amount<=0){ alert("Amount should be greater than 0."); return; }
+
+  let involved = selectedInvolved(); let splits={};
+  if(scope==="personal"){ involved=[payer]; splits={[payer]: Number(amount.toFixed(2))}; }
+  else{
+    const type=splitType.value;
+    if(type==="equal"){ splits = splitEqual({amount,involved}); }
+    else if(type==="shares"){
+      const inputs=document.querySelectorAll("#split-body-row input"); const weights={}; inputs.forEach(i=>weights[i.dataset.person]=Number(i.value||0));
+      splits = splitShares({amount,involved}, weights);
+    } else {
+      const inputs=document.querySelectorAll("#split-body-row input"); const exacts={}; inputs.forEach(i=>exacts[i.dataset.person]=Number(i.value||0));
+      const sum=Object.values(exacts).reduce((a,b)=>a+b,0);
+      if(Math.abs(sum-amount)>0.01){ if(!confirm(`Exact amounts sum ${fmt(sum)} vs ${fmt(amount)}. Normalize automatically?`)) return; }
+      splits = splitExact({amount,involved}, exacts);
+    }
+  }
+
+  state.expenses.push({ id:uid(), date, desc, cat, amount, payer, involved, splitType:splitType.value, splits, scope });
+  save(); renderAll();
+  expDesc.value=""; expAmount.value="";
+});
+$("clear-form").addEventListener("click", ()=>{
+  expDate.value=todayStr(); expDesc.value=""; expCat.value=state.categories[0]||"Misc";
+  expAmount.value=""; expPayer.value=state.people[0]||""; scopeSel.value="shared";
+  Array.from(expInvolved.options).forEach(o=>o.selected=true); splitType.value="equal"; renderSplitInputs();
+});
+
+filterCat.addEventListener("change", renderExpensesTable);
+filterPayer.addEventListener("change", renderExpensesTable);
+filterScope.addEventListener("change", renderExpensesTable);
+filterText.addEventListener("input", renderExpensesTable);
+
+/* export/import/reset */
+exportCsvBtn.addEventListener("click", ()=>{
+  const csv = buildCSV();
+  downloadBlob(csv, `${safeName(state.tripName)||'TripSplit'}-export.csv`, "text/csv;charset=utf-8;");
+});
+exportJsonBtn.addEventListener("click", ()=>{
+  downloadBlob(JSON.stringify(state,null,2), `${safeName(state.tripName)||'TripSplit'}.json`, "application/json");
+});
+importJsonInput.addEventListener("change", (e)=>{
+  const f=e.target.files?.[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload = evt=>{
+    try{
+      const obj=JSON.parse(String(evt.target.result));
+      if(!obj.people || !obj.expenses){ alert("Invalid file."); return; }
+      state=obj; save(); renderAll();
+    }catch(err){ alert("Failed to import JSON."); }
+  };
+  r.readAsText(f); importJsonInput.value="";
+});
+exportXlsxBtn.addEventListener("click", ()=>{
+  try{
+    const wb = XLSX.utils.book_new();
+
+    const expRows = [["Date","Description","Category","Payer","Scope","Amount","Split type","Splits (name:amount)"]];
+    state.expenses.forEach(e=>{
+      const splitStr = Object.entries(e.splits||{}).map(([k,v])=>`${k}:${Number(v).toFixed(2)}`).join("; ");
+      expRows.push([e.date, e.desc||"", e.cat, e.payer, e.scope, Number(e.amount||0), e.splitType, splitStr]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expRows), "Expenses");
+
+    const { totals, bal, catTotals, dayTotals } = computeStats();
+
+    const balRows = [["Person","Paid","Owed","Net"]];
+    state.people.forEach(p=>{
+      const paid=bal.paid[p]||0, owed=bal.owed[p]||0, net=paid-owed;
+      balRows.push([p, paid, owed, net]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(balRows), "Balances");
+
+    const stRows=[["From","To","Amount"]]; computeSettlements(bal).forEach(s=> stRows.push([s.from, s.to, s.amount]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(stRows), "Settlements");
+
+    const catRows=[["Category","Total"]]; Object.keys(catTotals).sort().forEach(c=> catRows.push([c, catTotals[c]]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(catRows), "By Category");
+
+    const dayRows=[["Date","Total"]]; Object.keys(dayTotals).sort().forEach(d=> dayRows.push([d, dayTotals[d]]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dayRows), "By Day");
+
+    const totRows=[["Metric","Amount"],["Total Trip",totals.trip],["Shared",totals.shared],["Personal",totals.personal]];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(totRows), "Totals");
+
+    XLSX.writeFile(wb, `${safeName(state.tripName)||'TripSplit'}.xlsx`);
+  }catch(e){ alert("Excel export failed — try CSV instead."); console.error(e); }
+});
+resetBtn.addEventListener("click", ()=>{
+  if(!confirm("This will clear all data. Continue?")) return;
+  state={ tripName:"", currency:"৳", people:[], categories:[...defaultCategories], expenses:[] };
+  save(); renderAll();
+});
+
+/* CSV builder */
+function buildCSV(){
+  const lines=[]; const push = row => lines.push(row.map(x=>{
+    const s=String(x??""); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
+  }).join(","));
+
+  push(["Trip", state.tripName]); push(["Currency", state.currency]); push([]); push(["Participants", ...state.people]); push([]);
+
+  push(["Expenses"]);
+  push(["Date","Description","Category","Payer","Scope","Amount","Split type","Splits (name:amount)"]);
+  state.expenses.forEach(e=>{
+    const splitStr = Object.entries(e.splits||{}).map(([k,v])=>`${k}:${Number(v).toFixed(2)}`).join("; ");
+    push([e.date, e.desc||"", e.cat, e.payer, e.scope, Number(e.amount||0).toFixed(2), e.splitType, splitStr]);
+  });
+  push([]);
+
+  const { totals, bal, catTotals, dayTotals } = computeStats();
+  push(["Totals"]); push(["Trip", totals.trip.toFixed(2)]); push(["Shared", totals.shared.toFixed(2)]); push(["Personal", totals.personal.toFixed(2)]); push([]);
+  push(["Balances"]); push(["Person","Paid","Owed","Net"]);
+  state.people.forEach(p=>{
+    const paid=bal.paid[p]||0, owed=bal.owed[p]||0, net=paid-owed;
+    push([p, paid.toFixed(2), owed.toFixed(2), net.toFixed(2)]);
+  });
+  push([]);
+  push(["Settlements"]); push(["From","To","Amount"]);
+  computeSettlements(bal).forEach(s=> push([s.from, s.to, s.amount.toFixed(2)]));
+  push([]);
+  push(["By Category"]); push(["Category","Total"]);
+  Object.keys(catTotals).sort().forEach(c=> push([c, catTotals[c].toFixed(2)]));
+  push([]);
+  push(["By Day"]); push(["Date","Total"]);
+  Object.keys(dayTotals).sort().forEach(d=> push([d, dayTotals[d].toFixed(2)]));
+  return lines.join("\n");
+}
+function downloadBlob(content, filename, type){
+  const blob = new Blob([content], {type});
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0);
+}
+
+/* init */
+if(!expDate.value) expDate.value = todayStr();
+if(!state.categories || state.categories.length===0) state.categories=[...defaultCategories];
+renderAll();
+</script>
+</body>
+</html>
